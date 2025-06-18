@@ -1,0 +1,232 @@
+C51 COMPILER V9.60.0.0   MAIN                                                              06/03/2025 17:39:00 PAGE 1   
+
+
+C51 COMPILER V9.60.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN main.OBJ
+COMPILER INVOKED BY: E:\keil5\keilMDK_Install\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND
+
+line level    source
+
+   1          #include <reg51.h>
+   2          #include "lcd.h"
+   3          #include "temp.h"
+   4          #include <intrins.h>
+   5          
+   6          typedef unsigned int u16;       
+   7          typedef unsigned char u8;
+   8          
+   9          sbit moto = P1^0;
+  10          sbit KEY_PAUSE  = P3^0;
+  11          sbit KEY_RESUME = P3^1;
+  12          sbit KEY_CLEAR  = P3^2;
+  13          
+  14          sbit beep = P1^5;          // 蜂鸣器控制引脚
+  15          
+  16          bit stopwatch_running = 1;    
+  17          volatile unsigned long stopwatch_count = 0;   
+  18          volatile unsigned char lcd_update_flag = 0; 
+  19          
+  20          bit beep_enable = 0;  // 新增：蜂鸣器是否开启标志
+  21          bit beep_state = 0;   // 新增：当前蜂鸣器输出电平状态（用于周期闪烁）
+  22          
+  23          uchar CNCHAR[6] = "TEMP";
+  24          unsigned long last_stopwatch_value = 0;
+  25          
+  26          
+  27          // Timer0 中断服务函数
+  28          void Timer0_ISR(void) interrupt 1 {
+  29   1          static unsigned char ten_times = 0;
+  30   1          static unsigned int beep_counter = 0;  // 新增：用于控制蜂鸣器周期
+  31   1      
+  32   1          TH0 = 0xDC;
+  33   1          TL0 = 0x00;
+  34   1      
+  35   1          if (stopwatch_running) stopwatch_count++;
+  36   1      
+  37   1          if (++ten_times >= 10) {
+  38   2              ten_times = 0;
+  39   2              lcd_update_flag = 1;
+  40   2          }
+  41   1      
+  42   1          // 蜂鸣器处理：大约每10ms进入一次此中断
+  43   1          if (beep_enable) {
+  44   2              if (++beep_counter >= 5) { // 每约50ms翻转一次蜂鸣器电平
+  45   3                  beep_counter = 0;
+  46   3                  beep_state = !beep_state;
+  47   3                  beep = beep_state;
+  48   3              }
+  49   2          } else {
+  50   2              beep = 1;  // 关闭蜂鸣器
+  51   2              beep_counter = 0;
+  52   2              beep_state = 0;
+  53   2          }
+  54   1      }
+  55          
+C51 COMPILER V9.60.0.0   MAIN                                                              06/03/2025 17:39:00 PAGE 2   
+
+  56          void delay_ms(u16 ms) {
+  57   1          u16 i, j;
+  58   1          for (i = 0; i < ms; i++)
+  59   1              for (j = 0; j < 120; j++);
+  60   1      }
+  61          
+  62          void delay(u16 i) {
+  63   1          while(i--); 
+  64   1      }
+  65          
+  66          void UsartConfiguration() {
+  67   1          SCON=0x50;
+  68   1          TMOD|=0x20;
+  69   1          PCON=0x80;
+  70   1          TH1=0xF3;
+  71   1          TL1=0xF3;
+  72   1          TR1=1;
+  73   1      }
+  74          
+  75          void Timer0_Init() {
+  76   1          TMOD &= 0xF0;
+  77   1          TMOD |= 0x01;          
+  78   1          TH0 = 0xDC;            
+  79   1          TL0 = 0x00;            
+  80   1          ET0 = 1;
+  81   1          EA = 1;
+  82   1          TR0 = 1;
+  83   1      }
+  84          
+  85          //void Timer0_ISR(void) interrupt 1 {
+  86          //    static unsigned char ten_times = 0;
+  87          //    TH0 = 0xDC;
+  88          //    TL0 = 0x00;
+  89          
+  90          //    if (stopwatch_running) stopwatch_count++;
+  91          
+  92          //    if (++ten_times >= 10) {
+  93          //        ten_times = 0;
+  94          //        lcd_update_flag = 1;
+  95          //    }
+  96          //}
+  97          
+  98          void LcdDisplayTemperature(int temp) {
+  99   1          unsigned char i;
+ 100   1          unsigned char datas[] = {0, 0, 0, 0, 0};
+ 101   1          float tp;
+ 102   1          int int_temp;
+ 103   1      
+ 104   1          LcdWriteCom(0x80);
+ 105   1          LcdWriteData(temp < 0 ? '-' : '+');
+ 106   1          temp = temp < 0 ? ~temp + 1 : temp;
+ 107   1      
+ 108   1          tp = temp * 0.0625;
+ 109   1          int_temp = (int)(tp * 100 + 0.5);
+ 110   1      
+ 111   1          datas[0] = int_temp / 10000;
+ 112   1          datas[1] = int_temp % 10000 / 1000;
+ 113   1          datas[2] = int_temp % 1000 / 100;
+ 114   1          datas[3] = int_temp % 100 / 10;
+ 115   1          datas[4] = int_temp % 10;
+ 116   1      
+ 117   1          LcdWriteCom(0x82);
+C51 COMPILER V9.60.0.0   MAIN                                                              06/03/2025 17:39:00 PAGE 3   
+
+ 118   1          for(i = 0; i < 3; i++) LcdWriteData('0' + datas[i]);
+ 119   1          LcdWriteData('.');
+ 120   1          LcdWriteData('0' + datas[3]);
+ 121   1          LcdWriteData('0' + datas[4]);
+ 122   1      
+ 123   1          for(i = 0; i < 6; i++) LcdWriteData(CNCHAR[i]);
+ 124   1      }
+ 125          
+ 126          void DisplayStopwatch() {
+ 127   1          unsigned long total_centisec = stopwatch_count;
+ 128   1          unsigned int total_seconds = total_centisec / 100;
+ 129   1          unsigned char minutes = total_seconds / 60;
+ 130   1          unsigned char seconds = total_seconds % 60;
+ 131   1          unsigned char centisec = total_centisec % 100;
+ 132   1      
+ 133   1          LcdWriteCom(0xC0);
+ 134   1          LcdWriteData("ST: ");
+*** WARNING C214 IN LINE 134 OF main.c: 'Argument': conversion: pointer to non-pointer
+ 135   1          LcdWriteData('0' + minutes / 10);
+ 136   1          LcdWriteData('0' + minutes % 10);
+ 137   1          LcdWriteData(':');
+ 138   1          LcdWriteData('0' + seconds / 10);
+ 139   1          LcdWriteData('0' + seconds % 10);
+ 140   1          LcdWriteData('.');
+ 141   1          LcdWriteData('0' + centisec / 10);
+ 142   1          LcdWriteData('0' + centisec % 10);
+ 143   1      }
+ 144          
+ 145          void KeyScan() {
+ 146   1          if (!KEY_PAUSE) {
+ 147   2              delay_ms(5);
+ 148   2              if (!KEY_PAUSE) {
+ 149   3                  stopwatch_running = 0;
+ 150   3                  while (!KEY_PAUSE);
+ 151   3              }
+ 152   2          }
+ 153   1          if (!KEY_RESUME) {
+ 154   2              delay_ms(5);
+ 155   2              if (!KEY_RESUME) {
+ 156   3                  stopwatch_running = 1;
+ 157   3                  while (!KEY_RESUME);
+ 158   3              }
+ 159   2          }
+ 160   1          if (!KEY_CLEAR) {
+ 161   2              delay_ms(5);
+ 162   2              if (!KEY_CLEAR) {
+ 163   3                  stopwatch_count = 0;
+ 164   3                  stopwatch_running = 0;
+ 165   3                  DisplayStopwatch();
+ 166   3                  while (!KEY_CLEAR);
+ 167   3              }
+ 168   2          }
+ 169   1      }
+ 170          void main() {
+ 171   1          UsartConfiguration();
+ 172   1          Timer0_Init();
+ 173   1          LcdInit();
+ 174   1          beep = 1;  // 初始化蜂鸣器关闭
+ 175   1      
+ 176   1          LcdWriteCom(0x88);
+ 177   1          LcdWriteData('C');
+ 178   1      
+C51 COMPILER V9.60.0.0   MAIN                                                              06/03/2025 17:39:00 PAGE 4   
+
+ 179   1          while(1) {
+ 180   2              int current_temp;
+ 181   2              delay(10);
+ 182   2              KeyScan();
+ 183   2      
+ 184   2              current_temp = Ds18b20ReadTemp();  // 读取温度值
+ 185   2              LcdDisplayTemperature(current_temp);
+ 186   2      
+ 187   2              // 新逻辑：设置蜂鸣器使能标志
+ 188   2              if (current_temp > 480) {  // 30°C对应480（0.0625分辨率）
+ 189   3                  beep_enable = 1;
+ 190   3              } else {
+ 191   3                  beep_enable = 0;
+ 192   3              }
+ 193   2      
+ 194   2              if (lcd_update_flag) {
+ 195   3                  lcd_update_flag = 0;
+ 196   3                  if (stopwatch_count != last_stopwatch_value) {
+ 197   4                      last_stopwatch_value = stopwatch_count;
+ 198   4                      DisplayStopwatch();
+ 199   4                  }
+ 200   3              }
+ 201   2          }
+ 202   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    869    ----
+   CONSTANT SIZE    =     10    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     18      21
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      3    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  1 WARNING(S),  0 ERROR(S)
